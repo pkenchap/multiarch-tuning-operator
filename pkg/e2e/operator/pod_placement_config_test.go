@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtimeclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/openshift/multiarch-tuning-operator/apis/multiarch/common"
 	"github.com/openshift/multiarch-tuning-operator/apis/multiarch/v1alpha1"
 	"github.com/openshift/multiarch-tuning-operator/apis/multiarch/v1beta1"
 
@@ -71,6 +72,41 @@ var _ = Describe("The Multiarch Tuning Operator", Serial, func() {
 			c := &v1beta1.ClusterPodPlacementConfig{}
 			err = client.Get(ctx, runtimeclient.ObjectKey{Name: "cluster"}, c)
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+	Context("When a v1beta1 pod placement config is created", func() {
+		AfterEach(func() {
+			By("Deleting the ClusterPodPlacementConfig")
+			err := client.Delete(ctx, NewClusterPodPlacementConfig().WithName(common.SingletonResourceObjectName).Build())
+			Expect(err).NotTo(HaveOccurred(), "failed to delete ClusterPodPlacementConfig", err)
+			Eventually(framework.ValidateDeletion(client, ctx)).Should(Succeed(), "the ClusterPodPlacementConfig should be deleted")
+		})
+		It("should create v1beta1 CPPC and get v1alpha1 with plugin specs", func() {
+			By("Creating a v1beta1 ClusterPodPlacementConfig")
+			err := client.Create(ctx,
+				NewClusterPodPlacementConfig().
+					WithName(common.SingletonResourceObjectName).
+					WithNodeAffinityScoring(true).
+					WithNodeAffinityScoringTerm(utils.ArchitectureArm64, 50).
+					Build(),
+			)
+			Expect(err).NotTo(HaveOccurred(), "failed to create ClusterPodPlacementConfig v1beta1", err)
+			// Get the details
+			ppc := &v1beta1.ClusterPodPlacementConfig{}
+			err = client.Get(ctx, runtimeclient.ObjectKeyFromObject(&v1beta1.ClusterPodPlacementConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      common.SingletonResourceObjectName,
+					Namespace: utils.Namespace(),
+				},
+			}), ppc)
+			Expect(err).NotTo(HaveOccurred(), "failed to get ClusterPodPlacementConfig v1beta1", err)
+			// Get v1alpha1 ClusterPodPlacementConfig
+			By("Get a v1alpha1 ClusterPodPlacementConfig")
+			v1alpha1obj := &v1alpha1.ClusterPodPlacementConfig{}
+			err = client.Get(ctx, runtimeclient.ObjectKey{
+				Name: common.SingletonResourceObjectName,
+			}, v1alpha1obj)
+			Expect(err).NotTo(HaveOccurred(), "failed to get v1alpha1 ClusterPodPlacementConfig", err)
 		})
 	})
 	Context("The webhook should get requests only for pods matching the namespaceSelector in the ClusterPodPlacementConfig CR", func() {

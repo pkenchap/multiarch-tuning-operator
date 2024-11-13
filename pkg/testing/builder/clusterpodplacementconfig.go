@@ -2,6 +2,7 @@ package builder
 
 import (
 	"github.com/openshift/multiarch-tuning-operator/apis/multiarch/common"
+	"github.com/openshift/multiarch-tuning-operator/apis/multiarch/common/plugins"
 	"github.com/openshift/multiarch-tuning-operator/apis/multiarch/v1beta1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -33,4 +34,23 @@ func (p *ClusterPodPlacementConfigBuilder) WithLogVerbosity(logVerbosity common.
 
 func (p *ClusterPodPlacementConfigBuilder) Build() *v1beta1.ClusterPodPlacementConfig {
 	return p.ClusterPodPlacementConfig
+}
+
+func (p *ClusterPodPlacementConfigBuilder) WithNodeAffinityScoring(enabled bool) *ClusterPodPlacementConfigBuilder {
+	if p.Spec.Plugins.NodeAffinityScoring == nil {
+		p.Spec.Plugins.NodeAffinityScoring = &plugins.NodeAffinityScoring{}
+	}
+	p.Spec.Plugins.NodeAffinityScoring.BasePlugin.Enabled = enabled
+	return p
+}
+
+func (p *ClusterPodPlacementConfigBuilder) WithNodeAffinityScoringTerm(architecture string, weight int32) *ClusterPodPlacementConfigBuilder {
+	if p.Spec.Plugins.NodeAffinityScoring == nil {
+		p.Spec.Plugins.NodeAffinityScoring = &plugins.NodeAffinityScoring{}
+	}
+	p.Spec.Plugins.NodeAffinityScoring.Platforms = append(p.Spec.Plugins.NodeAffinityScoring.Platforms, plugins.NodeAffinityScoringPlatformTerm{
+		Architecture: architecture,
+		Weight:       weight,
+	})
+	return p
 }
