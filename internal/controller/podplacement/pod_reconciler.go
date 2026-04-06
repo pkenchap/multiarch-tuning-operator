@@ -129,6 +129,10 @@ func (r *PodReconciler) processPod(ctx context.Context, pod *Pod) {
 		return
 	}
 
+	// Check if any matching PPC has CEL Architecture Placement enabled
+	// CEL placement takes precedence over image-based detection
+	celPlacementApplied := r.applyCelArchPlacement(ctx, matchingPPCs, pod)
+
 	// Skip preferred affinity processing if the user has already configured architecture-related preferred affinity
 	// or if the reconcile loop has already applied the PPCs/CPPC (e.g., due to a retry or re-reconciliation)
 	if !pod.isPreferredAffinityConfiguredForArchitecture() {
@@ -143,13 +147,19 @@ func (r *PodReconciler) processPod(ctx context.Context, pod *Pod) {
 		r.trackSkippedMatchingConfigs(ctx, pod, cppc, matchingPPCs)
 	}
 
-	// Prepare the requirement for the node affinity.
-	psdl, err := r.pullSecretDataList(ctx, pod)
-	pod.handleError(err, "Unable to retrieve the image pull secret data for the pod.")
-	// If no error occurred when retrieving the image pull secret data, set the node affinity.
-	if err == nil {
-		_, err = pod.SetNodeAffinityArchRequirement(psdl)
-		pod.handleError(err, "Unable to set the node affinity for the pod.")
+	// Only perform image-based architecture detection if CEL placement was not applied
+	var err error
+	if !celPlacementApplied {
+		// Prepare the requirement for the node affinity.
+		psdl, err := r.pullSecretDataList(ctx, pod)
+		pod.handleError(err, "Unable to retrieve the image pull secret data for the pod.")
+		// If no error occurred when retrieving the image pull secret data, set the node affinity.
+		if err == nil {
+			_, err = pod.SetNodeAffinityArchRequirement(psdl)
+			pod.handleError(err, "Unable to set the node affinity for the pod.")
+		}
+	} else {
+		log.V(1).Info("CEL architecture placement applied, skipping image-based architecture detection")
 	}
 	if pod.maxRetries() && err != nil {
 		// the number of retries is incremented in the handleError function when the error is not nil.
@@ -203,6 +213,57 @@ func (r *PodReconciler) applyMatchingPPCs(ctx context.Context, matchingPPCs []mu
 		configSource := fmt.Sprintf("%s-%s", multiarchv1beta1.PodPlacementConfigKind, ppc.Name)
 		pod.SetPreferredArchNodeAffinity(ppc.Spec.Plugins.NodeAffinityScoring, configSource)
 	}
+}
+
+// applyCelArchPlacement evaluates CEL rules from matching PodPlacementConfigs and applies
+// architecture constraints based on the first matching rule or default architectures.
+// Returns true if CEL placement was applied, false otherwise.
+func (r *PodReconciler) applyCelArchPlacement(ctx context.Context, matchingPPCs []multiarchv1beta1.PodPlacementConfig, pod *Pod) bool {
+	log := ctrllog.FromContext(ctx).WithName("CelArchPlacement")
+
+	// Sort the configurations by descending priority
+	sort.Slice(matchingPPCs, func(i, j int) bool {
+		return matchingPPCs[i].Spec.Priority > matchingPPCs[j].Spec.Priority
+	})
+
+	// Get the CEL evaluator
+	evaluator, err := getCelEvaluator()
+	if err != nil {
+		log.Error(err, "Failed to get CEL evaluator")
+		pod.PublishEvent(corev1.EventTypeWarning, "CelEvaluatorError", fmt.Sprintf("Failed to initialize CEL evaluator: %v", err))
+		return false
+	}
+
+	// Process each matching PodPlacementConfig in priority order
+	for _, ppc := range matchingPPCs {
+		// Check if CEL architecture placement plugin is enabled
+		if !ppc.PluginsEnabled(common.CelArchPlacementPluginName) {
+			log.V(2).Info("Skipping PodPlacementConfig - CelArchPlacement plugin not enabled", "namespace", ppc.Namespace, "name", ppc.Name)
+			continue
+		}
+
+		log.V(1).Info("Processing PodPlacementConfig with CelArchPlacement", "namespace", ppc.Namespace, "name", ppc.Name)
+
+		// Evaluate CEL rules
+		architectures, ruleName, err := evaluator.evaluateRules(ppc.Spec.Plugins.CelArchPlacement, pod.PodObject())
+		if err != nil {
+			log.Error(err, "Failed to evaluate CEL rules", "PodPlacementConfig", ppc.Name)
+			pod.PublishEvent(corev1.EventTypeWarning, "CelEvaluationError", fmt.Sprintf("Failed to evaluate CEL rules from %s: %v", ppc.Name, err))
+			continue
+		}
+
+		// Apply the architecture constraints
+		log.V(1).Info("Applying CEL architecture constraints", "architectures", architectures, "ruleName", ruleName, "PodPlacementConfig", ppc.Name)
+		pod.setCelArchitectureConstraints(architectures, ruleName)
+
+		// Add annotation to track which PPC applied the CEL placement
+		configSource := fmt.Sprintf("%s-%s", multiarchv1beta1.PodPlacementConfigKind, ppc.Name)
+		pod.EnsureAnnotation("multiarch.openshift.io/cel-arch-placement-source", configSource)
+
+		return true
+	}
+
+	return false
 }
 
 // trackSkippedMatchingConfigs tracks in the annotation which PPC/CPPC configs would have been applied

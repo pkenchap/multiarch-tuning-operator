@@ -322,6 +322,88 @@ func (pod *Pod) setRequiredNodeAffinityToFallbackArchitecture(architecture strin
 		ArchitectureFallbackSetupMsg+fmt.Sprintf("{%s}", architecture))
 }
 
+// removeArchitectureConstraints removes any existing architecture constraints from the pod's
+// nodeSelector and nodeAffinity. This is used by the CEL Architecture Placement plugin to
+// ensure clean slate before applying new architecture rules.
+func (pod *Pod) removeArchitectureConstraints() {
+	// Remove from nodeSelector
+	if pod.Spec.NodeSelector != nil {
+		delete(pod.Spec.NodeSelector, utils.ArchLabel)
+	}
+
+	// Remove from nodeAffinity
+	if pod.Spec.Affinity != nil && pod.Spec.Affinity.NodeAffinity != nil &&
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
+
+		nodeSelectorTerms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
+		var cleanedTerms []corev1.NodeSelectorTerm
+
+		for _, term := range nodeSelectorTerms {
+			// Filter out architecture-related match expressions
+			var cleanedExpressions []corev1.NodeSelectorRequirement
+			for _, expr := range term.MatchExpressions {
+				if expr.Key != utils.ArchLabel {
+					cleanedExpressions = append(cleanedExpressions, expr)
+				}
+			}
+
+			// Only keep the term if it has remaining expressions or match fields
+			if len(cleanedExpressions) > 0 || len(term.MatchFields) > 0 {
+				term.MatchExpressions = cleanedExpressions
+				cleanedTerms = append(cleanedTerms, term)
+			}
+		}
+
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms = cleanedTerms
+	}
+}
+
+// setCelArchitectureConstraints sets architecture constraints based on CEL rule evaluation.
+// It removes any existing architecture constraints first, then applies the new ones.
+func (pod *Pod) setCelArchitectureConstraints(architectures []string, ruleName string) {
+	log := ctrllog.FromContext(pod.Ctx())
+
+	// Remove existing architecture constraints
+	pod.removeArchitectureConstraints()
+
+	// Create the requirement for the new architectures
+	requirement := corev1.NodeSelectorRequirement{
+		Key:      utils.ArchLabel,
+		Operator: corev1.NodeSelectorOpIn,
+		Values:   architectures,
+	}
+
+	// Ensure affinity structure exists
+	if pod.Spec.Affinity == nil {
+		pod.Spec.Affinity = &corev1.Affinity{}
+	}
+
+	if pod.Spec.Affinity.NodeAffinity == nil {
+		pod.Spec.Affinity.NodeAffinity = &corev1.NodeAffinity{}
+	}
+
+	if pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{}
+	}
+
+	// Set the new architecture requirement
+	pod.setRequiredArchNodeAffinity(requirement)
+
+	// Add label to track CEL placement
+	pod.EnsureLabel(utils.CelArchPlacementLabel, utils.CelArchPlacementLabelValueSet)
+
+	// Publish event
+	if ruleName != "" {
+		log.V(1).Info("Applied CEL architecture rule", "ruleName", ruleName, "architectures", architectures)
+		pod.PublishEvent(corev1.EventTypeNormal, ArchitectureAwareNodeAffinitySet,
+			fmt.Sprintf("CEL rule '%s' matched. Architecture set to: {%s}", ruleName, strings.Join(architectures, ", ")))
+	} else {
+		log.V(1).Info("Applied CEL default architectures", "architectures", architectures)
+		pod.PublishEvent(corev1.EventTypeNormal, ArchitectureAwareNodeAffinitySet,
+			fmt.Sprintf("No CEL rules matched. Default architectures set to: {%s}", strings.Join(architectures, ", ")))
+	}
+}
+
 func (pod *Pod) getArchitecturePredicate(pullSecretDataList [][]byte) (corev1.NodeSelectorRequirement, error) {
 	architectures, err := pod.intersectImagesArchitecture(pullSecretDataList)
 	// if an error occurs, we return an empty NodeSelectorRequirement and the error.

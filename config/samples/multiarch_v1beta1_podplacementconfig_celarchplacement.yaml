@@ -1,0 +1,70 @@
+apiVersion: multiarch.openshift.io/v1beta1
+kind: PodPlacementConfig
+metadata:
+  name: cel-arch-placement-example
+  namespace: production
+spec:
+  labelSelector:
+    matchLabels:
+      tier: database
+  plugins:
+    celArchPlacement:
+      enabled: true
+      defaultArchitectures:
+        - amd64
+      rules:
+        - name: postgres-on-ppc64le
+          expression: |
+            self.metadata.labels.exists(l, l.key == 'app.kubernetes.io/component' && l.value == 'database') &&
+            self.metadata.labels.exists(l, l.key == 'app.kubernetes.io/part-of' && l.value == 'postgresql')
+          architectures:
+            - ppc64le
+        - name: redis-on-amd64-and-arm64
+          expression: |
+            self.metadata.name.startsWith('redis-')
+          architectures:
+            - amd64
+            - arm64
+        - name: critical-services-multi-arch
+          expression: |
+            self.metadata.labels.exists(l, l.key == 'priority' && l.value == 'critical') ||
+            (self.metadata.labels.exists(l, l.key == 'tier' && l.value == 'backend') &&
+             self.metadata.labels.exists(l, l.key == 'sla' && l.value == 'gold'))
+          architectures:
+            - ppc64le
+            - amd64
+---
+apiVersion: multiarch.openshift.io/v1beta1
+kind: PodPlacementConfig
+metadata:
+  name: simple-cel-example
+  namespace: development
+spec:
+  plugins:
+    celArchPlacement:
+      enabled: true
+      defaultArchitectures:
+        - amd64
+      rules:
+        - name: nginx-pods
+          expression: self.metadata.name == 'nginx-example'
+          architectures:
+            - arm64
+---
+apiVersion: multiarch.openshift.io/v1beta1
+kind: PodPlacementConfig
+metadata:
+  name: migration-example
+  namespace: migration-test
+spec:
+  plugins:
+    celArchPlacement:
+      enabled: true
+      defaultArchitectures:
+        - amd64  # Safe default for existing workloads
+      rules:
+        - name: new-services-on-ppc64le
+          expression: self.metadata.labels.exists(l, l.key == 'migration-ready' && l.value == 'true')
+          architectures:
+            - ppc64le
+

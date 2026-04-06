@@ -63,6 +63,8 @@ const (
 	FallbackArchitectureLabel              = "multiarch.openshift.io/fallback-arch"
 	ImageInspectionErrorLabel              = "multiarch.openshift.io/image-inspect-error"
 	ImageInspectionErrorCountLabel         = "multiarch.openshift.io/image-inspect-error-count"
+	CelArchPlacementLabel                  = "multiarch.openshift.io/cel-arch-placement"
+	CelArchPlacementLabelValueSet          = "set"
 	LabelGroup                             = "multiarch.openshift.io"
 )
 

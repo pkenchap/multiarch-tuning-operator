@@ -9,4 +9,6 @@ const (
 	NodeAffinityScoringPluginName Plugin = iota
 	// ENoExecPlugin checks the ENoExecEvent resources.
 	ExecFormatErrorMonitorPluginName
+	// CelArchPlacementPlugin provides CEL-based architecture selection rules.
+	CelArchPlacementPluginName
 )
